@@ -21,6 +21,6 @@ coverage/
 .idea/
 .DS_Store
 
-# App uploads (kept out of git)
+# App uploads (keep folder, ignore files)
 public/uploads/*
 !public/uploads/.gitkeep
