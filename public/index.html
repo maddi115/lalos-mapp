@@ -41,6 +41,28 @@ html,body{overflow:hidden;background:var(--bg);font-family:Inter,system-ui,-appl
 
 <script>
 "use strict";
+
+
+// Reset localStorage if past the 3 AM daily reset
+const now = new Date();
+const lastReset = Number(localStorage.getItem("lm_lastReset") || 0);
+
+// Build "today at 3 AM"
+const resetTime = new Date();
+resetTime.setHours(3, 0, 0, 0); // 3:00 AM today
+
+// If we haven't reset yet today AND current time is past 3 AM
+if (now.getTime() >= resetTime.getTime() && lastReset < resetTime.getTime()) {
+  localStorage.removeItem("lm_postId");
+  localStorage.removeItem("lm_comment");
+  localStorage.removeItem("lm_pxSaved");
+  // optional: also clear deviceId
+  // localStorage.removeItem("lm_deviceId");
+
+  localStorage.setItem("lm_lastReset", String(now.getTime()));
+}
+
+
 /* ===== helpers ===== */
 const $=id=>document.getElementById(id), on=(e,t,f)=>e&&e.addEventListener(t,f), sh=(id,b)=>$(id)?.classList.toggle("hide",!b);
 const note=t=>{const n=$("note");if(!n)return;n.textContent=t;n.classList.remove("hide")}, clearNote=()=>$("note")?.classList.add("hide");
