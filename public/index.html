@@ -1,10 +1,15 @@
-<!doctype html><html lang="en"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>HUD Map — 1-mile</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"/>
 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<!-- prevent favicon 404 spam -->
+<link rel="icon" href="data:,">
 <style>
 :root{--bg:#fff}*{box-sizing:border-box}html,body,#gl{height:100%;width:100%;margin:0}
 html,body{overflow:hidden;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
@@ -17,20 +22,21 @@ html,body{overflow:hidden;background:var(--bg);font-family:Inter,system-ui,-appl
 .btn{cursor:pointer}.btn:hover{background:#111}.btn[disabled]{opacity:.5;cursor:not-allowed}
 .btn.link{background:transparent;padding:6px 8px;border-radius:8px;opacity:.8}.btn.link:hover{background:#0a0a0a;opacity:1}
 .tag{font:600 12px/1 Inter;border-radius:999px}.help{font:600 12px/1.2 Inter;opacity:.9}.crosshair{cursor:crosshair!important}
-#ytBox{position:absolute;z-index:2147483601;border:0;overflow:hidden}#ytBox iframe{width:100%;height:100%;border:0;display:block}
 .hide{display:none!important}
 #note{position:fixed;top:10px;left:10px;background:#000;color:#fff;padding:6px 8px;border-radius:8px;font:600 12px/1 Inter;opacity:.9}
-</style></head><body>
+</style>
+</head>
+<body>
 <div id="gl"></div><div id="note" class="hide">loading…</div>
 
 <div id="ui" role="region" aria-label="Controls">
   <div class="row" id="topRow"><span id="locState" class="tag">Location: —</span><span id="hint" class="help hide" aria-live="polite">Click “Use my location” to enable 1-mile ring</span></div>
   <div id="step1" class="row"><span class="tag">1/3</span><button id="doLoc" class="btn">📍 Use my location</button></div>
   <div id="step2" class="row hide"><span class="tag">2/3</span><span class="tag hide" id="placeTip">go on map and place inside radius</span><button id="placeHere" class="btn hide">Place here</button></div>
-  <div id="step3" class="row hide"><span class="tag">3/3</span><button id="pick" class="btn">Upload image/video</button><input id="urlIn" class="input" type="url" placeholder="Paste media URL (image/GIF/video/YouTube)"/><button id="done" class="btn hide">✓ Done</button></div>
+  <div id="step3" class="row hide"><span class="tag">3/3</span><button id="pick" class="btn">Upload image</button><button id="done" class="btn hide">✓ Done</button></div>
   <div id="step3x" class="row hide"><span class="tag">Size: <span id="curPx">8px</span> / 349px</span><span class="tag" id="rate">rate: 1.35×</span></div>
   <div id="mini" class="row hide" aria-label="Compact"><span class="tag">Size: <span id="miniPx">8px</span> / 349px</span><button id="chg" class="btn link" aria-label="Change image">change image</button><input id="miniCmt" class="input tiny" type="text" maxlength="15" placeholder="comment…"/><button id="expand" class="btn" aria-label="Expand controls">⋯</button></div>
-  <input id="file" type="file" accept="image/*,video/*" style="display:none"/>
+  <input id="file" type="file" accept="image/*" style="display:none"/>
 </div>
 
 <script>
@@ -38,22 +44,26 @@ html,body{overflow:hidden;background:var(--bg);font-family:Inter,system-ui,-appl
 /* ===== helpers ===== */
 const $=id=>document.getElementById(id), on=(e,t,f)=>e&&e.addEventListener(t,f), sh=(id,b)=>$(id)?.classList.toggle("hide",!b);
 const note=t=>{const n=$("note");if(!n)return;n.textContent=t;n.classList.remove("hide")}, clearNote=()=>$("note")?.classList.add("hide");
-const j=(u,o)=>fetch(u,o).then(r=>{if(!r.ok)throw new Error(r.status+" "+r.statusText);return r.json()});
+const j=(u,o)=>fetch(u,o).then(async r=>{if(!r.ok){let body="";try{body=await r.text()}catch{};throw new Error(r.status+" "+r.statusText+(body?(" | "+body):""))}return r.json()});
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const getQS=(k)=> new URL(location.href).searchParams.get(k);
+
 /* ===== consts ===== */
 const MOBI=/Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
 const START=[-118.258683,34.017235], ZREF=16, MINPX=8, MAXPX=349, GOAL=229*60*1000, SPEED=1.35;
 const RAD_M=1609.344, D2R=Math.PI/180, E111=111320, API="", LS_ID="lm_postId", LS_CMT="lm_comment", LS_DEV="lm_deviceId";
 const MAX_CMT=15, SAVE_IVL=5000, SAVE_DPX=4;
 const SID="s", LID="l", GIMG="g", GBOX="gb", RADS="rad", RADF="radf", RADL="radl";
+
 /* ===== state ===== */
 let map, anchor=null, userCenter=null, youMarker=null, step=1;
-let mode="img", imgURL="", ytID="", ytBox=null, mediaReady=0, natW=0, natH=0, baseW=0, baseH=0, geoW=0, geoH=0;
-let commentText="", domCmt=null, gifCanvas=null, gifCtx=null, gifRAF=0, blobURL="";
+let mode="img", imgURL="", mediaReady=0, natW=0, natH=0, baseW=0, baseH=0, geoW=0, geoH=0;
+let commentText="", domCmt=null, gifCanvas=null, gifCtx=null, gifRAF=0;
 let tAct=0, tickTimer=0, lastPxSaved=+localStorage.getItem("lm_pxSaved")||0, lastPxAt=0;
 let savedId=localStorage.getItem(LS_ID)||"", deviceId=localStorage.getItem(LS_DEV)||(crypto.getRandomValues(new Uint32Array(4)).join('-'));
 localStorage.setItem(LS_DEV,deviceId);
-const notFoundURLs=new Set(); const globalState=new Map(); let globalTimer=0;
+const notFoundURLs=new Set(); const globalState=new Map(); let globalTimer=0; let NO_FEED=false;
+
 /* ===== minis ===== */
 const lsCmt=t=>{const v=(t||"").trim();v?localStorage.setItem(LS_CMT,v):localStorage.removeItem(LS_CMT)};
 const mpp=(lng,lat)=>{const p=map.project([lng,lat]),x=map.unproject([p.x+1,p.y]),y=map.unproject([p.x,p.y+1]);return{x:Math.abs((x.lng-lng)*(E111*Math.cos(lat*D2R)||1e-9)),y:Math.abs((y.lat-lat)*E111)}};
@@ -64,17 +74,57 @@ const curPx=()=>Math.round(MINPX+(MAXPX-MINPX)*(1-Math.pow(1-Math.min(1,Math.max
 const tFromPx=px=>{const y=clamp((px-MINPX)/(MAXPX-MINPX),0,1);return clamp((1-Math.cbrt(1-y))*GOAL,0,GOAL)};
 const lockM=()=>{const c=anchor||map.getCenter(),r=mpp(c.lng,c.lat),s=Math.pow(2,map.getZoom()-ZREF);geoW=baseW*r.x*s;geoH=baseH*r.y*s};
 const rm=(id,layer=1)=>{try{(layer?map.getLayer(id):map.getSource(id))&&(layer?map.removeLayer(id):map.removeSource(id))}catch{}};
-const detect=u=>{const m=u.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([\w-]{11})/i);if(m)return{t:"yt",id:m[1]};const L=u.toLowerCase();if(/\.(mp4|webm|ogv)(\?|#|$)/.test(L)||L.startsWith("blob:"))return{t:"vid",url:u};if(/\.(gif)(\?|#|$)/.test(L)||/^data:image\/gif/.test(L))return{t:"gif",url:u};return{t:"img",url:u}};
-const safeURL=u=>{try{if(u.startsWith("data:"))return true;if(u.startsWith("blob:"))return false;if(u.startsWith("/"))return true;const p=new URL(u,location.origin).protocol;return p==="http:"||p==="https:"}catch{return false}};
-const hasMedia=()=> (mode==="yt"&&ytID)||(mode==="gif"&&gifCanvas)||imgURL;
-const goodPost=p=>p&&Array.isArray(p.coordinates)&&((p.mediaType==="yt"&&p.ytId)||((p.url||"").startsWith("/uploads/")||(p.url||"").startsWith("http")||(p.url||"").startsWith("data:")));
+const hasMedia=()=> (gifCanvas || imgURL);
+const goodPost=p=>p&&Array.isArray(p.coordinates)&&((p.url||"").startsWith("/uploads/")||(p.url||"").startsWith("http")||(p.url||"").startsWith("data:"));
+
 /* distance helpers */
 const hav=(a,b,c,d)=>{const R=6371000,phi1=b*D2R,phi2=d*D2R,dphi=(d-b)*D2R,dl=(c-a)*D2R,x=Math.sin(dphi/2)**2+Math.cos(phi1)*Math.cos(phi2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.sqrt(x))};
 const inside=(lng,lat)=> userCenter? hav(lng,lat,userCenter.lng,userCenter.lat)<=RAD_M:false;
-const near=(a,b)=>anchor? hav(a,b,anchor.lng,anchor.lat) <= 3 : false; // <= ~3m: treat as my own
+const near=(a,b)=>anchor? hav(a,b,anchor.lng,anchor.lat) <= 3 : false;
+
 /* ring */
 const circle=(lng,lat,r,n=96)=>({type:"Feature",geometry:{type:"Polygon",coordinates:[Array.from({length:n+1},(_,i)=>{const ang=i/n*2*Math.PI,p=off(lng,lat,Math.cos(ang)*r,Math.sin(ang)*r);return[p.lng,p.lat]})]}}); 
 const drawRad=()=>{if(!userCenter)return;const d=circle(userCenter.lng,userCenter.lat,RAD_M);if(!map.getSource(RADS)){map.addSource(RADS,{type:"geojson",data:d});map.addLayer({id:RADF,type:"fill",source:RADS,paint:{"fill-color":"#2b2b2b","fill-opacity":.02}});map.addLayer({id:RADL,type:"line",source:RADS,paint:{"line-color":"#2b2b2b","line-width":2,"line-opacity":0.08}})}else map.getSource(RADS).setData(d)};
+
+/* ===== clearing helpers for hard reset / empty DB ===== */
+function removeLayerAndSource(idLayer, idSource){
+  try{ if(map.getLayer(idLayer)) map.removeLayer(idLayer) }catch{}
+  try{ if(map.getSource(idSource)) map.removeSource(idSource) }catch{}
+}
+function clearClientState(){
+  removeLayerAndSource("l","s");
+  try{ if(map.getLayer(GIMG+"l")) map.removeLayer(GIMG+"l") }catch{}
+  try{ if(map.getSource(GIMG)) map.removeSource(GIMG) }catch{}
+  try{ if(map.getLayer(GBOX+"l")) map.removeLayer(GBOX+"l") }catch{}
+  try{ if(map.getLayer(GBOX+"f")) map.removeLayer(GBOX+"f") }catch{}
+  try{ if(map.getSource(GBOX)) map.removeSource(GBOX) }catch{}
+  try{ if(map.getLayer(RADL)) map.removeLayer(RADL) }catch{}
+  try{ if(map.getLayer(RADF)) map.removeLayer(RADF) }catch{}
+  try{ if(map.getSource(RADS)) map.removeSource(RADS) }catch{}
+
+  if (globalState instanceof Map) {
+    for (const [id,g] of Array.from(globalState.entries())) {
+      try{ if(g?.layerId && map.getLayer(g.layerId)) map.removeLayer(g.layerId) }catch{}
+      try{ if(g?.srcId && map.getSource(g.srcId)) map.removeSource(g.srcId) }catch{}
+      try{ g?.marker?.remove?.() }catch{}
+      globalState.delete(id);
+    }
+  }
+
+  try{ domCmt?.remove?.(); domCmt=null }catch{}
+  try{ youMarker?.remove?.(); youMarker=null }catch{}
+
+  commentText=""; lsCmt("");
+  imgURL=""; mediaReady=0; savedId=""; localStorage.removeItem(LS_ID);
+  lastPxSaved=0; localStorage.removeItem("lm_pxSaved");
+  anchor=null; userCenter=null;
+
+  const loc=$("locState"); if(loc) loc.textContent="Location: —";
+  const hint=$("hint"); if(hint){ hint.textContent="Click “Use my location” to enable 1-mile ring"; hint.classList.add("hide") }
+  ["mini","step2","step3","step3x","placeHere","placeTip"].forEach(id=>$(id)?.classList.add("hide"));
+  $("step1")?.classList.remove("hide");
+}
+
 /* map init */
 const FALLBACK_STYLE={version:8,name:"OSM Raster",sources:{osm:{type:"raster",tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],tileSize:256,attribution:"© OpenStreetMap contributors"}},layers:[{id:"osm",type:"raster",source:"osm"}]};
 async function initMap(){
@@ -84,25 +134,31 @@ async function initMap(){
   map=new maplibregl.Map({container:"gl",style:style||FALLBACK_STYLE,center:START,zoom:11,dragRotate:false,pitchWithRotate:false,maxPitch:0,renderWorldCopies:false,antialias:false,trackResize:true,fadeDuration:0});
   map.addControl(new maplibregl.NavigationControl({showCompass:false}),"bottom-right");
   map.on("error",e=>{console.error(e);note("map error (see console)")});
-  map.on("load",async()=>{map.resize();clearNote();wire();init();tick();await restore(); enableFeed()});
+  map.on("load",async()=>{
+    map.resize(); clearNote(); wire(); init(); tick();
+    await restore();
+    if(!NO_FEED) enableFeed();
+  });
   map.on("move",()=>{if(anchor){refreshCmt();refreshYou()}})
 }
+
 /* you label */
 const youPos=()=>anchor?[anchor.lng,anchor.lat+((geoH/2)+10)/E111]:null;
 const showYou=()=>{if(!anchor)return;const p=youPos();if(!p)return;if(!youMarker){const el=document.createElement("div");el.textContent="you";el.style.cssText="font:600 11px/1 Inter,system-ui;color:#111;background:#fff;padding:2px 6px;border-radius:999px;border:1px solid #ddd;box-shadow:0 1px 2px rgba(0,0,0,.06);pointer-events:none;";youMarker=new maplibregl.Marker({element:el,anchor:"bottom"}).setLngLat(p).addTo(map)}else youMarker.setLngLat(p)};
 const refreshYou=()=>{if(youMarker&&anchor){const p=youPos();p&&youMarker.setLngLat(p)}},hideYou=()=>{youMarker?.remove();youMarker=null},youAuto=()=>{(commentText.trim()?hideYou:showYou)()};
+
 /* place preview */
 let cleanup=()=>{};
-const ghostAt=(lng,lat)=>{if(!userCenter){$("hint").textContent="Click “Use my location” first";sh("hint",true);return ghost(1)}if(!inside(lng,lat)){ghost(1);if(step===2){$("hint").textContent="place inside 1-mile radius";sh("hint",true)};return}
+const ghostAt=(lng,lat)=>{if(!userCenter){$("hint")&&($("hint").textContent="Click “Use my location” first");sh("hint",true);return ghost(1)}if(!inside(lng,lat)){ghost(1);if(step===2){$("hint")&&($("hint").textContent="place inside 1-mile radius");sh("hint",true)};return}
   const px=curPx();fit(px);const r=mpp(lng,lat),s=Math.pow(2,map.getZoom()-ZREF),w=baseW*r.x*s,h=baseH*r.y*s,c=quad(lng,lat,w,h);
   const poly={type:"Feature",geometry:{type:"Polygon",coordinates:[[...c,c[0]]]}}; 
   if(!map.getSource(GBOX)){map.addSource(GBOX,{type:"geojson",data:poly});map.addLayer({id:GBOX+"f",type:"fill",source:GBOX,paint:{"fill-color":"#1e90ff","fill-opacity":.08}});map.addLayer({id:GBOX+"l",type:"line",source:GBOX,paint:{"line-color":"#1e90ff","line-width":2}})}else map.getSource(GBOX).setData(poly);
-  if(imgURL&&(mode==="img"||mode==="gif")){if(!map.getSource(GIMG)){map.addSource(GIMG,{type:"image",url:imgURL,coordinates:c});map.addLayer({id:GIMG+"l",type:"raster",source:GIMG,paint:{"raster-opacity":.35,"raster-fade-duration":0}})}else map.getSource(GIMG)?.setCoordinates?.(c)}};
+  if(imgURL){if(!map.getSource(GIMG)){map.addSource(GIMG,{type:"image",url:imgURL,coordinates:c});map.addLayer({id:GIMG+"l",type:"raster",source:GIMG,paint:{"raster-opacity":.35,"raster-fade-duration":0}})}else map.getSource(GIMG)?.setCoordinates?.(c)}};
 const ghost=b=>{if(!b)return;rm(GIMG+"l",1);rm(GIMG,0);rm(GBOX+"l",1);rm(GBOX+"f",1);rm(GBOX,0)};
-const startPlace=()=>{try{cleanup()}catch{};$("hint").textContent=MOBI?"Pan map, then Place here":"go on map and place inside radius";sh("hint",true);
+const startPlace=()=>{try{cleanup()}catch{};$("hint")&&($("hint").textContent=MOBI?"Pan map, then Place here":"go on map and place inside radius");sh("hint",true);
   if(!MOBI){
     const mv=e=>ghostAt(e.lngLat.lng,e.lngLat.lat);
-    const ck=e=>{const{lng,lat}=e.lngLat;if(!inside(lng,lat))return($("hint").textContent="place inside 1-mile radius",sh("hint",true));
+    const ck=e=>{const{lng,lat}=e.lngLat;if(!inside(lng,lat))return($("hint")&&($("hint").textContent="place inside 1-mile radius"),sh("hint",true));
       stop();anchor={lng,lat};fit(curPx());lockM();if(hasMedia())apply();if(mediaReady)updStamp();updCmt();youAuto();stepShow(3)};
     const key=ev=>{if(ev.key==="Escape")stop()};
     map.getCanvas().classList.add("crosshair");map.on("mousemove",mv);map.once("click",ck);document.addEventListener("keydown",key);
@@ -114,23 +170,16 @@ const startPlace=()=>{try{cleanup()}catch{};$("hint").textContent=MOBI?"Pan map,
     cleanup=()=>{try{map.off("move",follow)}catch{};sh("placeHere",false);ghost(1);sh("hint",false)}
   } function stop(){try{cleanup()}catch{}}
 };
+
 /* media */
 const clearGIF=()=>{cancelAnimationFrame(gifRAF);gifRAF=0;gifCanvas=gifCtx=null};
-const clearMedia=()=>{clearGIF();rm(LID,1);rm(SID,0);rm(GIMG+"l",1);rm(GIMG,0);removeYT();mediaReady=0;sh("step3x",false)};
+const clearMedia=()=>{clearGIF();rm(LID,1);rm(SID,0);rm(GIMG+"l",1);rm(GIMG,0);mediaReady=0;sh("step3x",false)};
 const apply=()=>{clearMedia();purgeGlobalsNearMine();if(!anchor)return;const c=quad(anchor.lng,anchor.lat,geoW,geoH);
-  if(mode==="yt"){showYT();mediaReady=1;updYT();updCmt();sh("step3x",true);compactify();youAuto();saveOnce();return}
-  if(mode==="vid"){map.addSource(SID,{type:"video",urls:[imgURL],coordinates:c});map.addLayer({id:LID,type:"raster",source:SID,paint:{"raster-opacity":1,"raster-fade-duration":0}});map.getSource(SID)?.play?.();mediaReady=1;updCmt();sh("step3x",true);compactify();youAuto();saveOnce();return}
-  if(mode==="gif"&&gifCanvas){map.addSource(SID,{type:"canvas",canvas:gifCanvas,coordinates:c,animate:true});map.addLayer({id:LID,type:"raster",source:SID,paint:{"raster-opacity":1,"raster-fade-duration":0}});mediaReady=1;updCmt();sh("step3x",true);compactify();youAuto();saveOnce();return}
+  if(gifCanvas){map.addSource(SID,{type:"canvas",canvas:gifCanvas,coordinates:c,animate:true});map.addLayer({id:LID,type:"raster",source:SID,paint:{"raster-opacity":1,"raster-fade-duration":0}});mediaReady=1;updCmt();sh("step3x",true);compactify();youAuto();saveOnce();return}
   map.addSource(SID,{type:"image",url:imgURL,coordinates:c});map.addLayer({id:LID,type:"raster",source:SID,paint:{"raster-opacity":1,"raster-fade-duration":0}});mediaReady=1;updCmt();sh("step3x",true);compactify();youAuto();saveOnce()
 };
 const updStamp=()=>{const s=map.getSource(SID);s&&anchor&&s.setCoordinates?.(quad(anchor.lng,anchor.lat,geoW,geoH))};
-/* yt overlay */
-const showYT=()=>{removeYT();ytBox=document.createElement("div");ytBox.id="ytBox";const f=document.createElement("iframe");
-  f.allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";f.referrerPolicy="strict-origin-when-cross-origin";
-  f.src=`https://www.youtube.com/embed/${ytID}?autoplay=1&mute=1&playsinline=1&controls=1`;ytBox.appendChild(f);document.body.appendChild(ytBox);map.on("move",updYT);window.addEventListener("resize",updYT)};
-const updYT=()=>{if(!anchor||!ytBox)return;const tl=off(anchor.lng,anchor.lat,-geoW/2,+geoH/2),br=off(anchor.lng,anchor.lat,+geoW/2,-geoH/2);
-  const p1=map.project([tl.lng,tl.lat]),p2=map.project([br.lng,br.lat]),s=ytBox.style;s.left=Math.min(p1.x,p2.x)+"px";s.top=Math.min(p1.y,p2.y)+"px";s.width=Math.abs(p2.x-p1.x)+"px";s.height=Math.abs(p2.y-p1.y)+"px"};
-const removeYT=()=>{try{map.off("move",updYT)}catch{};window.removeEventListener("resize",updYT);ytBox?.parentNode?.removeChild(ytBox);ytBox=null};
+
 /* comments */
 const stampPx=()=>{if(!anchor)return{h:0};const tl=off(anchor.lng,anchor.lat,-geoW/2,+geoH/2),br=off(anchor.lng,anchor.lat,+geoW/2,-geoH/2);
   const p1=map.project([tl.lng,tl.lat]),p2=map.project([br.lng,br.lat]);return{h:Math.abs(p2.y-p1.y)}};
@@ -141,6 +190,7 @@ const updCmt=()=>{commentText=(commentText||"").slice(0,MAX_CMT);const t=comment
   if(!domCmt){const el=document.createElement("div");el.style.cssText=["font:700 12px/1.25 Inter, system-ui","color:#111","background:rgba(255,255,255,.98)","padding:4px 8px","border-radius:10px","border:1px solid rgba(0,0,0,.12)","box-shadow:0 2px 8px rgba(0,0,0,.25)","pointer-events:none"].join(";");el.textContent=t;domCmt=new maplibregl.Marker({element:el,anchor:"bottom"}).setLngLat([anchor.lng,anchor.lat]).addTo(map)}else domCmt.getElement().textContent=t;
   refreshCmt();lsCmt(t)
 };
+
 /* save/restore */
 const capCmt=v=>((v||"").slice(0,MAX_CMT).trim()||null);
 async function saveOrUpdate(fields){
@@ -148,7 +198,7 @@ async function saveOrUpdate(fields){
     const cmt = fields && fields.comment !== undefined ? capCmt(fields.comment) : capCmt(commentText);
     if(!savedId){
       if(!anchor||!hasMedia())return;
-      const body={lng:anchor.lng,lat:anchor.lat,mediaType:mode,url:(mode==="yt")?null:(imgURL||null),ytId:(mode==="yt")?(ytID||null):null,
+      const body={lng:anchor.lng,lat:anchor.lat,mediaType:gifCanvas?'gif':'img',url:(imgURL||null),
         comment:cmt,natSize:(natW&&natH)?{w:natW,h:natH}:null,pxAtPlace:(typeof fields?.pxAtPlace==="number")?fields.pxAtPlace:curPx(),
         userCenter:userCenter||null,deviceId};
       const r=await j(`${API}/api/posts`,{method:"POST",headers:{"Content-Type":"application/json","X-Device-Id":deviceId},body:JSON.stringify(body)});
@@ -172,7 +222,6 @@ async function headOK(u){
   try{
     const r=await fetch(u,{method:'HEAD',cache:'no-store'});
     if(r.ok) return true;
-    // some stacks mis-handle HEAD; try a byte range GET as fallback
     const g=await fetch(u,{method:'GET',cache:'no-store',headers:{'Range':'bytes=0-0'}});
     return g.ok;
   }catch{ return false }
@@ -193,19 +242,32 @@ function purgeGlobalsNearMine(){
   }
 }
 async function restore(){
+  if (getQS('reset') === '1') {
+    try { clearClientState() } catch(e) { console.warn('reset clear failed', e) }
+    NO_FEED = true;
+    stepShow(1);
+    return;
+  }
+
   let p=null, id=localStorage.getItem(LS_ID)||"";
-  try{ if(id){ try{ p=await j(`${API}/api/posts/${id}`) }catch{} }
-       if(!p){ const did=localStorage.getItem(LS_DEV); if(did){ try{ p=await j(`${API}/api/posts/latest?deviceId=${encodeURIComponent(did)}`) }catch{} } }
-       if(!p){ try{ p=await j(`${API}/api/posts/latest`) }catch{} }
-       if(!goodPost(p)){ p=null }
+  try{
+    if(id){ try{ p=await j(`${API}/api/posts/${id}`) }catch{} }
+    if(!p){ const did=localStorage.getItem(LS_DEV); if(did){ try{ p=await j(`${API}/api/posts/latest?deviceId=${encodeURIComponent(did)}`) }catch{} } }
+    if(!p){ try{ p=await j(`${API}/api/posts/latest`) }catch{} }
+    if(!goodPost(p)){ p=null }
   }catch(e){ console.error("restore",e) }
 
-  if(!p){ savedId=""; localStorage.removeItem(LS_ID); lsCmt(""); commentText=""; updCmt(); return }
+  if(!p){
+    clearClientState();
+    stepShow(1);
+    return;
+  }
 
   savedId=p.id; localStorage.setItem(LS_ID,savedId);
   anchor={lng:p.coordinates[0],lat:p.coordinates[1]}; userCenter=p.userCenter||null; if(userCenter) drawRad();
 
-  mode=p.mediaType||"img"; if(mode==="yt") ytID=p.ytId||""; else imgURL=p.url||"";
+  mode=(p.mediaType==='gif')?'gif':'img';
+  imgURL=p.url||"";
   if(p.natSize&&p.natSize.w&&p.natSize.h){ natW=p.natSize.w; natH=p.natSize.h }
 
   const px=p.pxAtPlace||MINPX; tAct=tFromPx(px);
@@ -217,18 +279,29 @@ async function restore(){
 
   map.easeTo({center:[anchor.lng,anchor.lat],zoom:14,duration:400}); stepShow(3); sh("step3x",true); compactify();
 }
+
 /* compact + tick */
-const setCompact=b=>{ $("ui").classList.toggle("compact",!!b); sh("mini",!!b); ["topRow","step1","step2","step3","step3x","hint"].forEach(id=>sh(id,!b&&(id!=="step3x"||step===3))); if(!b) stepShow(step) };
+const setCompact=b=>{ $("ui")?.classList.toggle("compact",!!b); sh("mini",!!b); ["topRow","step1","step2","step3","step3x","hint"].forEach(id=>sh(id,!b&&(id!=="step3x"||step===3))); if(!b) stepShow(step) };
 const finalizeUI=()=>["topRow","step1","step2","step3","step3x","hint","expand"].forEach(id=>$(id)?.parentNode?.removeChild($(id)));
 const compactify=()=>{sh("done",true); setCompact(true); finalizeUI()};
-const grow=()=>{const px=curPx(); $("curPx")&&($("curPx").textContent=px+"px"); $("miniPx")&&($("miniPx").textContent=px+"px"); if(!anchor)return; fit(px); lockM(); mediaReady&&(ytBox?updYT():updStamp()); refreshCmt(); refreshYou(); maybeSaveSize(px)};
+const grow=()=>{const px=curPx(); $("curPx")&&($("curPx").textContent=px+"px"); $("miniPx")&&($("miniPx").textContent=px+"px"); if(!anchor)return; fit(px); lockM(); mediaReady&&updStamp(); refreshCmt(); refreshYou(); maybeSaveSize(px)};
 const tick=()=>{if(tickTimer)return; let last=performance.now(); tickTimer=setInterval(()=>{const n=performance.now(); tAct=Math.min(GOAL,tAct+(n-last)*SPEED); last=n; grow()},1000)};
+
 /* steps & geo */
 const setLoc=t=>{const e=$("locState");e&&(e.textContent=t)}
-const init=()=>{stepShow(1);$("doLoc").textContent="📍 Use my location";$("rate").textContent="rate: 1.35×";setLoc("allow location to show your 1-mile radius")};
-const setHint=()=>sh("hint",step===2&&!MOBI?($("hint").textContent="go on map and place inside radius",true):false);
-function stepShow(n){["step1","step2","step3"].forEach((id,i)=>sh(id,i===n-1));step=n;sh("placeHere",n===2&&MOBI);sh("placeTip",n===2&&!MOBI);if(n!==3)sh("step3x",false);setHint();if(n===3)sh("step3x",true)}
-$("doLoc").onclick=()=>geoOnce();
+const init=()=>{stepShow(1);$("doLoc")&&($("doLoc").textContent="📍 Use my location");$("rate")&&($("rate").textContent="rate: 1.35×");setLoc("allow location to show your 1-mile radius")};
+const setHint=()=>{ const h=$("hint"); if(!h) return; if(step===2 && !MOBI){ h.textContent="go on map and place inside radius"; h.classList.remove("hide") } else { h.classList.add("hide") } };
+function stepShow(n){
+  step=n;
+  ["step1","step2","step3","step3x","placeHere","placeTip"].forEach(id=>{
+    const el=$(id); if(!el) return;
+    if(id==="step1") el.classList.toggle("hide", !(n===1));
+    if(id==="step2"||id==="placeTip"||id==="placeHere") el.classList.toggle("hide", !(n===2));
+    if(id==="step3"||id==="step3x") el.classList.toggle("hide", !(n===3));
+  });
+  setHint();
+}
+$("doLoc") && ($("doLoc").onclick=()=>geoOnce());
 navigator.permissions?.query?.({name:"geolocation"}).then(s=>{if(s.state==="denied"){const h=$("hint");if(h){h.textContent="Location blocked. Allow it in site settings.";sh("hint",true)}}}).catch(()=>{});
 function geoOnce(){
   setLoc("Location: requesting…"); if(!("geolocation"in navigator))return setLoc("Location: unsupported"),alert("Geolocation not supported.");
@@ -240,26 +313,18 @@ function geoOnce(){
     if(!window.isSecureContext&&location.hostname!=="localhost")alert("Use HTTPS or http://localhost"); else alert("Couldn’t get location. Check site permissions.");
   }, {enableHighAccuracy:true,timeout:30000,maximumAge:0});
 }
-/* loaders */
+
+/* loaders (images only; GIF supported) */
 const startGIF=()=>{if(!gifCanvas)return;const d=()=>{if(!gifCanvas)return;gifCtx.clearRect(0,0,gifCanvas.width,gifCanvas.height);gifCtx.drawImage(gifCanvas._img,0,0,gifCanvas.width,gifCanvas.height);map.triggerRepaint();gifRAF=requestAnimationFrame(d)};d()};
-const setupGIF=src=>{imgURL=src;const im=new Image();im.crossOrigin="anonymous";im.onload=()=>{natW=im.naturalWidth||256;natH=im.naturalHeight||256;const cap=1024,s=Math.min(1,cap/Math.max(natW,natH));gifCanvas=document.createElement("canvas");gifCanvas.width=Math.max(1,Math.round(natW*s));gifCanvas.height=Math.max(1,Math.round(natH*s));gifCtx=gifCanvas.getContext("2d");gifCanvas._img=im;if(!anchor){$("hint").textContent="Place first";sh("hint",true);return}startGIF();apply()};im.onerror=()=>alert("Couldn't load GIF.");im.src=src};
+const setupGIF=src=>{imgURL=src;const im=new Image();im.crossOrigin="anonymous";im.onload=()=>{natW=im.naturalWidth||256;natH=im.naturalHeight||256;const cap=1024,s=Math.min(1,cap/Math.max(natW,natH));gifCanvas=document.createElement("canvas");gifCanvas.width=Math.max(1,Math.round(natW*s));gifCanvas.height=Math.max(1,Math.round(natH*s));gifCtx=gifCanvas.getContext("2d");gifCanvas._img=im;if(!anchor){$("hint")&&($("hint").textContent="Place first");sh("hint",true);return}startGIF();apply()};im.onerror=()=>alert("Couldn't load GIF.");im.src=src};
 const uploadFile=async(f)=>{const form=new FormData();form.append('file',f,f.name||'upload');const r=await fetch(`${API}/api/upload`,{method:'POST',body:form});if(!r.ok)throw new Error('upload failed');return r.json()};
-const loadFile=async(f)=>{if(!anchor){$("hint").textContent="Place first";sh("hint",true);return}try{
+const loadFile=async(f)=>{if(!anchor){$("hint")&&($("hint").textContent="Place first");sh("hint",true);return}try{
   const {url,mime}=await uploadFile(f);
-  if((mime||'').startsWith('video/')){mode='vid';imgURL=url;const v=document.createElement('video');v.src=url;v.onloadedmetadata=()=>{natW=v.videoWidth||16;natH=v.videoHeight||9;apply()};v.onerror=()=>{natW=16;natH=9;apply()};return}
   if(mime==='image/gif'){mode='gif';setupGIF(url);return}
   mode='img';imgURL=url;const im=new Image();im.crossOrigin="anonymous";im.onload=()=>{natW=im.naturalWidth||256;natH=im.naturalHeight||256;apply()};im.onerror=()=>alert("Couldn't load image.");im.src=url
 }catch(e){console.error(e);alert('Upload failed. Try again.')}};
-const loadURL=u=>{
-  if(u.startsWith("blob:"))return alert("That URL is temporary. Please upload or use http(s).");
-  if(!safeURL(u))return alert("URL not allowed. Use /uploads, http(s) or data:.");
-  const d=detect(u); mode=d.t;
-  if(mode==="yt"){ytID=d.id;natW=16;natH=9; return anchor?apply():( $("hint").textContent="Place first", sh("hint",true) )}
-  if(mode==="vid"){imgURL=d.url; if(!anchor){$("hint").textContent="Place first";sh("hint",true);return} const v=document.createElement("video");v.muted=true;v.playsInline=true;v.src=imgURL;v.onloadedmetadata=()=>{natW=v.videoWidth||16;natH=v.videoHeight||9;apply()};v.onerror=()=>{natW=16;natH=9;apply()}; return}
-  if(mode==="gif")return setupGIF(d.url);
-  imgURL=d.url; const im=new Image(); im.crossOrigin="anonymous"; im.onload=()=>{natW=im.naturalWidth||256;natH=im.naturalHeight||256; anchor?apply():( $("hint").textContent="Place first", sh("hint",true) )}; im.onerror=()=>alert("Couldn't load image."); im.src=imgURL
-};
-/* ===== global feed (dedup + relaxed checks) ===== */
+
+/* ===== global feed (images only) ===== */
 const id4=p=>`g-${p.id}`; 
 function upsertGlobalLabel(p){
   const g=globalState.get(p.id)||{};
@@ -273,19 +338,13 @@ function upsertGlobalLabel(p){
 }
 async function upsertGlobalImage(p){
   if(!Array.isArray(p.coordinates)||p.coordinates.length<2) return;
-
-  // HARD SKIP: my own stamp by id, or anything within ~3m of my anchor (handles legacy rows with null deviceId)
   if( (savedId && p.id===savedId) || near(p.coordinates[0],p.coordinates[1]) ) return;
-
-  // Skip known-missing uploads to avoid console spam
   if(p.url && notFoundURLs.has(p.url)) return;
   if(p.url && p.url.startsWith('/uploads/')){
     const ok = await headOK(p.url);
     if(!ok){ notFoundURLs.add(p.url); return }
   }
-
   const [lng,lat]=p.coordinates, lid=id4(p), sid=lid+"-s";
-  // prefer stored size, otherwise 160px base
   const px=Math.max(MINPX,Math.min(MAXPX, +p.pxAtPlace||160)), r=mpp(lng,lat), s=Math.pow(2,map.getZoom()-ZREF);
   const w=px*r.x*s, h=px*r.y*s, coords=quad(lng,lat,w,h);
 
@@ -304,16 +363,17 @@ async function fetchGlobalInView(){
     const c=map.getCenter(); const q=`?lng=${c.lng}&lat=${c.lat}&radiusMeters=5000&limit=80`;
     let rows = await j(`${API}/api/posts/near${q}`);
     rows.sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
-    for(const p of rows){ if(p.mediaType==='yt' || !p.url) continue; await upsertGlobalImage(p) }
+    for(const p of rows){ if(!p.url) continue; await upsertGlobalImage(p) }
   }catch(e){ /* ignore */ }
 }
 function enableFeed(){ if(globalTimer) clearInterval(globalTimer); fetchGlobalInView(); globalTimer=setInterval(fetchGlobalInView,2000) }
+
 /* wiring */
 function wire(){
   const deb=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}};
   on($("pick"),"click",()=>$("file")?.click());
   on($("file"),"change",e=>{const f=e.target.files?.[0];f&&loadFile(f);e.target.value=""});
-  const pin=$("urlIn"), tryURL=deb(()=>{const v=pin.value.trim();v&&loadURL(v)},250); on(pin,"input",tryURL); on(pin,"change",()=>{const v=pin.value.trim();v&&loadURL(v)}); on(pin,"paste",tryURL);
+
   const saveCmt=deb(async()=>{ lsCmt(commentText); await saveOrUpdate({comment:capCmt(commentText)}) },400);
   on($("miniCmt"),"input",async()=>{ commentText=$("miniCmt").value.slice(0,MAX_CMT); updCmt(); await saveCmt() });
   on($("chg"),"click",()=>$("file")?.click());
@@ -327,7 +387,9 @@ function wire(){
   document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==='hidden') flush() });
   window.addEventListener("pagehide",flush);
 }
+
 /* go */
 initMap();
 </script>
-</body></html>
+</body>
+</html>
