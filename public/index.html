@@ -229,7 +229,7 @@ const App = {
 
         if (window.maplibregl && typeof maplibregl.supported === "function" && !maplibregl.supported()) return App.Dom.note("WebGL disabled.");
         App.Dom.note("loading map…");
-        let style = null; try { const r = await fetch("https://basemaps.cartocdn.com/gl/positron-gl-style/style.json", { mode: "cors" }); if (r.ok) style = await r.json() } catch {}
+        let style = null; try { const r = await fetch("https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json", { mode: "cors" }); if (r.ok) style = await r.json() } catch {}
         App.S.map = new maplibregl.Map({ container: "gl", style: style || App.C.FALLBACK_STYLE, center: App.C.START, zoom: 11, dragRotate: false, pitchWithRotate: false, maxPitch: 0, renderWorldCopies: false, antialias: false, trackResize: true, fadeDuration: 0 });
         App.S.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
         App.S.map.on("error", e => { console.error(e); App.Dom.note("map error (see console)") });
